@@ -15,6 +15,7 @@ import org.eclipse.jetty.http2.api.Stream;
 import org.eclipse.jetty.http2.client.HTTP2Client;
 import org.eclipse.jetty.http2.frames.DataFrame;
 import org.eclipse.jetty.http2.frames.HeadersFrame;
+import org.eclipse.jetty.http2.frames.SettingsFrame;
 import org.eclipse.jetty.util.Callback;
 import org.eclipse.jetty.util.FuturePromise;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
@@ -23,6 +24,7 @@ import java.net.InetSocketAddress;
 import java.net.URL;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -31,23 +33,35 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
+import java.util.Map;
 public class HTTP2Connection {
 
     private static Logger LOG = LoggerFactory.getLogger(HTTP2Connection.class);
     private String connectionId;
     private Session session;
+    Map<Integer, Integer> settings=new HashMap<Integer,Integer>();
+    {{  settings.put(SettingsFrame.HEADER_TABLE_SIZE, 4096);
+    	settings.put(SettingsFrame.ENABLE_PUSH,0);
+    	settings.put(SettingsFrame.MAX_CONCURRENT_STREAMS,1000);
+    	settings.put(SettingsFrame.MAX_FRAME_SIZE,16384);
+    	settings.put(SettingsFrame.MAX_HEADER_LIST_SIZE,65536);
+    	settings.put(SettingsFrame.INITIAL_WINDOW_SIZE,65535);
+    }}
+    SettingsFrame settingsFrame = new SettingsFrame(settings, true);
+    //session.setMaxLocalStreams(2000);
     private HTTP2Client client;
     private SslContextFactory sslContextFactory;
     private Queue<HTTP2StreamHandler> streamHandlers = new ConcurrentLinkedQueue<>();
-
-    public void setSession(Session session) {
+    //public SettingsFrame settingsFrame1=new SettingsFrame(settings1,false);
+	public void setSession(Session session) {
         this.session = session;
+       // this.session.settings(settingsFrame,Callback.NOOP);
     }
 
     public HTTP2Connection(String connectionId, boolean isSSL) throws Exception {
         this.session = null;
-        this.connectionId = connectionId;
+        //this.session.settings(frame, callback);
+    	this.connectionId = connectionId;
         this.client = new HTTP2Client();
         this.sslContextFactory = null;
         if (isSSL) {
@@ -65,7 +79,7 @@ public class HTTP2Connection {
         FuturePromise<Session> sessionFuture = new FuturePromise<>();
         this.client.connect(this.sslContextFactory, new InetSocketAddress(hostname, port),
                 new Session.Listener.Adapter(), sessionFuture);
-        setSession(sessionFuture.get(10, TimeUnit.SECONDS));
+        setSession(sessionFuture.get(5, TimeUnit.SECONDS));
     }
 
     public boolean isClosed() {
@@ -75,11 +89,14 @@ public class HTTP2Connection {
     private synchronized void sendMutExc(String method, HeadersFrame headersFrame, FuturePromise<Stream> streamPromise,
                                          HTTP2StreamHandler http2StreamHandler, RequestBody requestBody) throws Exception {
         session.newStream(headersFrame, streamPromise, http2StreamHandler);
+       // LOG.warn("PCP:sendMutExc stream_id :"+ (streamPromise.get()).getId());
         if ((HTTPConstants.POST.equals(method)) || (HTTPConstants.PUT.equals(method)) ||
-        		(HTTPConstants.PATCH.equals(method)) || (HTTPConstants.DELETE.equals(method))) {
+        		(HTTPConstants.PATCH.equals(method)) ) {
             Stream actualStream = streamPromise.get();
             int streamID = actualStream.getId();
+            
             DataFrame data = new DataFrame(streamID, ByteBuffer.wrap(requestBody.getPayloadBytes()), true);
+            //LOG.warn("PCP:sendMutExc stream_id POST|PUT|PATCH:"+ data.getStreamId());
             actualStream.data(data, Callback.NOOP);
         }
     }
@@ -124,7 +141,6 @@ public class HTTP2Connection {
             case "DELETE":
                 metaData = new MetaData.Request("DELETE", new HttpURI(url.toString()), HttpVersion.HTTP_2,
                         headers);
-                endOfStream = true;
                 break;
 
             default:
@@ -140,11 +156,10 @@ public class HTTP2Connection {
                 sampleResult);
         http2StreamHandler.setTimeout(timeout);
         sampleResult.setCookies(headers.get(HTTPConstants.HEADER_COOKIE));
-        addStreamHandler(http2StreamHandler);
-
+        
         sampleResult.sampleStart();
-
         sendMutExc(method, headersFrame, new FuturePromise<>(), http2StreamHandler, requestBody);
+        addStreamHandler(http2StreamHandler);
     }
 
     private HttpFields buildHeaders(URL url, HeaderManager headerManager, CookieManager cookieManager) {
@@ -186,22 +201,65 @@ public class HTTP2Connection {
         client.stop();
     }
 
-    public List<HTTP2SampleResult> awaitResponses() throws InterruptedException {
+    public synchronized List<HTTP2SampleResult> awaitResponses() throws InterruptedException {
         List<HTTP2SampleResult> results = new ArrayList<>();
         while (!streamHandlers.isEmpty()) {
-            HTTP2StreamHandler h = streamHandlers.poll();
+
+        	HTTP2StreamHandler h = streamHandlers.poll();
             results.add(h.getHTTP2SampleResult());
-            LOG.warn("PCP: Waiting for Response ");
+            
+           // LOG.warn("PCP: Waiting for Response() "+h.getHTTP2SampleResult().getResponseCode());
+             if(false==h.getHTTP2SampleResult().isSync())
+             {
+            
+            	h.getCompletedFuture().getNow(null);
+             }
+             else
+             {
+	            try {
+	                // wait to receive all the response of the request
+	               h.getCompletedFuture().get(h.getTimeout(), TimeUnit.MILLISECONDS);
+	               // LOG.warn("PCP: Returning from Waiting for Response "+ h.getHTTP2SampleResult().getResponseCode() );
+	               
+	                
+	            } catch (ExecutionException | TimeoutException e) {
+	                HTTP2SampleResult sample = h.getHTTP2SampleResult();
+	                sample.setErrorResult("Error while await for response", e);
+	                sample.setResponseHeaders("");
+	            }
+             }
+
+           
+        }
+        
+        return results;
+    }
+    public List<HTTP2SampleResult> awaitResponses1() throws InterruptedException {
+        List<HTTP2SampleResult> results = new ArrayList<>();
+        while (!streamHandlers.isEmpty()) {
+
+        	HTTP2StreamHandler h = streamHandlers.poll();
+        	//HTTP2StreamHandler h = streamHandlers.peek();
+            results.add(h.getHTTP2SampleResult());
+            
+            LOG.warn("PCP: Waiting for Response()1 ");
+           // h.getCompletedFuture().getNow(null);
             try {
                 // wait to receive all the response of the request
-                h.getCompletedFuture().get(h.getTimeout(), TimeUnit.MILLISECONDS);
+               h.getCompletedFuture().get(500, TimeUnit.MILLISECONDS);
+                LOG.warn("PCP: Returning from Waiting for Response "+ h.getHTTP2SampleResult().getResponseCode() );
+               
+                
             } catch (ExecutionException | TimeoutException e) {
                 HTTP2SampleResult sample = h.getHTTP2SampleResult();
                 sample.setErrorResult("Error while await for response", e);
                 sample.setResponseHeaders("");
             }
+           
+
+           
         }
+        
         return results;
     }
-
 }

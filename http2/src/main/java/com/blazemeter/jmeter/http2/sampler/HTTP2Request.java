@@ -207,7 +207,7 @@ public class HTTP2Request extends AbstractSampler implements ThreadListener, Loo
         // TODO implement cache Manager
       }
       if (isSyncRequest()) {
-        for (HTTP2Connection h : connections.get().values()) {
+    	for (HTTP2Connection h : connections.get().values()) {
           for (HTTP2SampleResult r : h.awaitResponses()) {
             saveConnectionCookies(r.getHttpFieldsResponse(), r.getURL(), getCookieManager());
           }
@@ -256,7 +256,7 @@ public class HTTP2Request extends AbstractSampler implements ThreadListener, Loo
 
   public void setConnection(URL url, HTTP2SampleResult sampleResult) throws Exception {
 
-    String host = url.getHost().replaceAll("\\[", "").replaceAll("]", "");
+	String host = url.getHost().replaceAll("\\[", "").replaceAll("]", "");
     int port = url.getPort();
 
     if (port == -1) {
@@ -275,6 +275,7 @@ public class HTTP2Request extends AbstractSampler implements ThreadListener, Loo
     } else {
       //TODO handle no SSL connection
       http2Connection = new HTTP2Connection(connectionId, false);
+      
       http2Connection.connect(host, port);
       threadConnections.put(connectionId, http2Connection);
     }
@@ -521,7 +522,7 @@ public class HTTP2Request extends AbstractSampler implements ThreadListener, Loo
 
   @Override
   public void threadFinished() {
-    waitAllResponses();
+    waitAllResponses1();
     for (HTTP2Connection connection : connections.get().values()) {
       try {
         connection.disconnect();
@@ -554,13 +555,31 @@ public class HTTP2Request extends AbstractSampler implements ThreadListener, Loo
 
   @Override
   public void iterationStart(LoopIterationEvent iterEvent) {
-    waitAllResponses();
+	  waitAllResponses();
+	  log.warn("PCP:waitAllResponses call from iterationStart"+ iterEvent.getSource()+ " "+ this.getThreadName());
   }
 
+	
+  
   private void waitAllResponses() {
-    connections.get().values().forEach(c -> {
+	  
+	  connections.get().values().forEach(c -> {
       try {
+    	  log.warn("PCP:waitAllResponses Aysnc "+ this.getThreadName());
         c.awaitResponses();
+        log.warn("PCP:waitAllResponses Aysnc completed"+ this.getThreadName());
+      } catch (InterruptedException e) {
+        log.warn("Interrupted while waiting for HTTP2 async responses", e);
+      }
+    });
+  }
+  private void waitAllResponses1() {
+	  
+	  connections.get().values().forEach(c -> {
+      try {
+    	  log.warn("PCP:waitAllResponses Aysnc "+ this.getThreadName());
+        c.awaitResponses1();
+        log.warn("PCP:waitAllResponses Aysnc completed"+ this.getThreadName());
       } catch (InterruptedException e) {
         log.warn("Interrupted while waiting for HTTP2 async responses", e);
       }

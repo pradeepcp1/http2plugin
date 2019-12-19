@@ -175,8 +175,14 @@ public class HTTP2StreamHandler extends Stream.Listener.Adapter {
     result.setHttpFieldsResponse(frame.getMetaData().getFields());
     if (frame.isEndStream()) {
     	try {
-    
-    	result.setSuccessful(isSuccessCode(Integer.parseInt(result.getResponseCode())));
+    	if(""!=result.getResponseCode())
+    	{
+    		result.setSuccessful(isSuccessCode(Integer.parseInt(result.getResponseCode())));
+    	}
+    	else {
+    		result.setSuccessful(false);
+    	}
+    	
         result.setResponseData(this.responseBytes);
         if (result.isRedirect()) {
           // TODO redirect
@@ -198,7 +204,11 @@ public class HTTP2StreamHandler extends Stream.Listener.Adapter {
             e.printStackTrace(); // TODO
             LOG.debug("TEST : onHeaders : In exception for data handling...");
         }
-    	completeStream();
+        if (frame.isEndStream()) {
+            result.setSuccessful(isSuccessCode(Integer.parseInt(result.getResponseCode())));
+            result.setResponseData(this.responseBytes);
+            completeStream();
+        }
     }
   }
 
@@ -216,7 +226,14 @@ public class HTTP2StreamHandler extends Stream.Listener.Adapter {
       setResponseBytes(bytes);
 
       if (frame.isEndStream()) {
-        result.setSuccessful(isSuccessCode(Integer.parseInt(result.getResponseCode())));
+    	if((""!=result.getResponseCode())&& (result.getResponseCode().length()<=5)) {
+    		result.setSuccessful(isSuccessCode(Integer.parseInt(result.getResponseCode())));	
+    	}
+    	else
+    	{
+    		result.setSuccessful(false);
+    	}
+        
         result.setResponseData(this.responseBytes);
         if (result.isRedirect()) {
           // TODO redirect
